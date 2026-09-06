@@ -1,0 +1,443 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum Role {
+  OWNER
+  ADMIN
+  MEMBER
+}
+
+enum FriendshipStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+  BLOCKED
+}
+
+enum InvitationStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+  EXPIRED
+}
+
+enum SplitType {
+  EQUAL
+  EXACT
+  PERCENTAGE
+  SHARES
+  ITEM
+}
+
+enum SettlementStatus {
+  PENDING
+  COMPLETED
+  CANCELLED
+}
+
+enum RecurrenceFrequency {
+  DAILY
+  WEEKLY
+  MONTHLY
+  YEARLY
+}
+
+enum NotificationType {
+  FRIEND_REQUEST
+  GROUP_INVITE
+  EXPENSE_ADDED
+  EXPENSE_UPDATED
+  PAYMENT_REQUESTED
+  SETTLEMENT_RECORDED
+  MEMBER_JOINED
+}
+
+// ----------------------------------------------------
+// Better Auth Core Models
+// ----------------------------------------------------
+
+model User {
+  id                  String               @id @default(cuid())
+  name                String
+  email               String               @unique
+  emailVerified       Boolean              @default(false)
+  image               String?
+  phone               String?
+  defaultCurrency     String               @default("INR")
+  timezone            String               @default("UTC")
+  preferredLanguage   String               @default("en")
+  notificationSettings Json?
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+
+  // Better Auth Relations
+  sessions            Session[]
+  accounts            Account[]
+
+  // SplitWise Domain Relations
+  sentFriendships     Friendship[]         @relation("SentFriendships")
+  receivedFriendships Friendship[]         @relation("ReceivedFriendships")
+  createdGroups       Group[]              @relation("GroupCreator")
+  groupMemberships    GroupMember[]
+  sentInvitations     GroupInvitation[]    @relation("SentInvitations")
+  receivedInvitations GroupInvitation[]    @relation("ReceivedInvitations")
+  personalExpenses    Expense[]            @relation("PersonalExpenses")
+  expensePayments     ExpensePayer[]
+  expenseSplits       ExpenseParticipant[]
+  sentSettlements     Settlement[]         @relation("PayerSettlements")
+  receivedSettlements Settlement[]         @relation("ReceiverSettlements")
+  sentPaymentRequests PaymentRequest[]     @relation("SentPaymentRequests")
+  receivedPaymentRequests PaymentRequest[] @relation("ReceivedPaymentRequests")
+  notifications       Notification[]
+  budgets             Budget[]
+  recurringExpenses   RecurringExpense[]
+  subscriptions       Subscription[]
+  customCategories    Category[]
+
+  @@map("user")
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  expiresAt DateTime
+  token     String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  ipAddress String?
+  userAgent String?
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("session")
+}
+
+model Account {
+  id                    String    @id @default(cuid())
+  accountId             String
+  providerId            String
+  userId                String
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessToken           String?   @db.Text
+  refreshToken          String?   @db.Text
+  idToken               String?   @db.Text
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?   @db.Text
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@index([userId])
+  @@map("account")
+}
+
+model Verification {
+  id         String   @id @default(cuid())
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@map("verification")
+}
+
+// ----------------------------------------------------
+// SplitWise Domain Models
+// ----------------------------------------------------
+
+model Friendship {
+  id        String           @id @default(cuid())
+  userId    String
+  friendId  String
+  status    FriendshipStatus @default(PENDING)
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+
+  user   User @relation("SentFriendships", fields: [userId], references: [id], onDelete: Cascade)
+  friend User @relation("ReceivedFriendships", fields: [friendId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, friendId])
+  @@index([userId])
+  @@index([friendId])
+  @@index([status])
+}
+
+model Group {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  image       String?
+  currency    String   @default("INR")
+  createdById String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  createdBy   User              @relation("GroupCreator", fields: [createdById], references: [id], onDelete: Cascade)
+  members     GroupMember[]
+  invitations GroupInvitation[]
+  expenses    Expense[]
+  settlements Settlement[]
+
+  @@index([createdById])
+}
+
+model GroupMember {
+  id       String   @id @default(cuid())
+  groupId  String
+  userId   String
+  role     Role     @default(MEMBER)
+  joinedAt DateTime @default(now())
+
+  group Group @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, userId])
+  @@index([groupId])
+  @@index([userId])
+}
+
+model GroupInvitation {
+  id          String           @id @default(cuid())
+  groupId     String
+  senderId    String
+  recipientId String?
+  email       String?
+  token       String           @unique @default(cuid())
+  status      InvitationStatus @default(PENDING)
+  expiresAt   DateTime
+  createdAt   DateTime         @default(now())
+
+  group     Group @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  sender    User  @relation("SentInvitations", fields: [senderId], references: [id], onDelete: Cascade)
+  recipient User? @relation("ReceivedInvitations", fields: [recipientId], references: [id], onDelete: SetNull)
+
+  @@index([groupId])
+  @@index([senderId])
+  @@index([recipientId])
+  @@index([status])
+}
+
+model Category {
+  id          String   @id @default(cuid())
+  name        String
+  icon        String?
+  color       String?
+  isCustom    Boolean  @default(false)
+  userId      String?
+  createdAt   DateTime @default(now())
+
+  user          User?          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  subcategories Subcategory[]
+  expenses      Expense[]
+  budgets       Budget[]
+
+  @@index([userId])
+}
+
+model Subcategory {
+  id         String   @id @default(cuid())
+  name       String
+  categoryId String
+  createdAt  DateTime @default(now())
+
+  category Category  @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  expenses Expense[]
+
+  @@index([categoryId])
+}
+
+model Expense {
+  id            String    @id @default(cuid())
+  title         String
+  description   String?
+  amount        Decimal   @db.Decimal(12, 2)
+  currency      String    @default("INR")
+  date          DateTime  @default(now())
+  paymentMethod String?
+  merchant      String?
+  location      String?
+  notes         String?
+  splitType     SplitType @default(EQUAL)
+  isGroup       Boolean   @default(false)
+  
+  userId        String?   // Personal expense owner or creator
+  groupId       String?
+  categoryId    String?
+  subcategoryId String?
+  receiptId     String?   @unique
+
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  user         User?                @relation("PersonalExpenses", fields: [userId], references: [id], onDelete: SetNull)
+  group        Group?               @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  category     Category?            @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  subcategory  Subcategory?         @relation(fields: [subcategoryId], references: [id], onDelete: SetNull)
+  receipt      Receipt?             @relation(fields: [receiptId], references: [id], onDelete: SetNull)
+  payers       ExpensePayer[]
+  participants ExpenseParticipant[]
+
+  @@index([userId])
+  @@index([groupId])
+  @@index([categoryId])
+  @@index([date])
+}
+
+model ExpensePayer {
+  id        String   @id @default(cuid())
+  expenseId String
+  userId    String
+  amount    Decimal  @db.Decimal(12, 2)
+
+  expense Expense @relation(fields: [expenseId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([expenseId])
+  @@index([userId])
+}
+
+model ExpenseParticipant {
+  id         String   @id @default(cuid())
+  expenseId  String
+  userId     String
+  amount     Decimal  @db.Decimal(12, 2)
+  percentage Decimal? @db.Decimal(5, 2)
+  shares     Int?
+
+  expense Expense @relation(fields: [expenseId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([expenseId])
+  @@index([userId])
+}
+
+model Receipt {
+  id         String   @id @default(cuid())
+  url        String
+  fileName   String
+  fileType   String
+  fileSize   Int
+  uploadedAt DateTime @default(now())
+
+  expense Expense?
+}
+
+model Settlement {
+  id            String           @id @default(cuid())
+  groupId       String?
+  payerId       String
+  receiverId    String
+  amount        Decimal          @db.Decimal(12, 2)
+  currency      String           @default("INR")
+  date          DateTime         @default(now())
+  paymentMethod String?
+  note          String?
+  status        SettlementStatus @default(COMPLETED)
+  createdAt     DateTime         @default(now())
+
+  group    Group? @relation(fields: [groupId], references: [id], onDelete: SetNull)
+  payer    User   @relation("PayerSettlements", fields: [payerId], references: [id], onDelete: Cascade)
+  receiver User   @relation("ReceiverSettlements", fields: [receiverId], references: [id], onDelete: Cascade)
+
+  @@index([groupId])
+  @@index([payerId])
+  @@index([receiverId])
+  @@index([date])
+}
+
+model PaymentRequest {
+  id         String   @id @default(cuid())
+  senderId   String
+  receiverId String
+  amount     Decimal  @db.Decimal(12, 2)
+  currency   String   @default("INR")
+  message    String?
+  isResolved Boolean  @default(false)
+  createdAt  DateTime @default(now())
+
+  sender   User @relation("SentPaymentRequests", fields: [senderId], references: [id], onDelete: Cascade)
+  receiver User @relation("ReceivedPaymentRequests", fields: [receiverId], references: [id], onDelete: Cascade)
+
+  @@index([senderId])
+  @@index([receiverId])
+}
+
+model Notification {
+  id        String           @id @default(cuid())
+  userId    String
+  type      NotificationType
+  title     String
+  message   String
+  isRead    Boolean          @default(false)
+  link      String?
+  metadata  Json?
+  createdAt DateTime         @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([isRead])
+}
+
+model Budget {
+  id         String   @id @default(cuid())
+  userId     String
+  categoryId String
+  amount     Decimal  @db.Decimal(12, 2)
+  month      Int      // 1-12
+  year       Int
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  category Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, categoryId, month, year])
+  @@index([userId])
+}
+
+model RecurringExpense {
+  id            String              @id @default(cuid())
+  userId        String
+  title         String
+  amount        Decimal             @db.Decimal(12, 2)
+  currency      String              @default("INR")
+  frequency     RecurrenceFrequency @default(MONTHLY)
+  startDate     DateTime
+  nextDueDate   DateTime
+  categoryId    String?
+  paymentMethod String?
+  isActive      Boolean             @default(true)
+  createdAt     DateTime            @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([nextDueDate])
+}
+
+model Subscription {
+  id            String              @id @default(cuid())
+  userId        String
+  serviceName   String
+  amount        Decimal             @db.Decimal(12, 2)
+  currency      String              @default("INR")
+  billingCycle  RecurrenceFrequency @default(MONTHLY)
+  nextBillingDate DateTime
+  category      String?
+  paymentMethod String?
+  isActive      Boolean             @default(true)
+  createdAt     DateTime            @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
